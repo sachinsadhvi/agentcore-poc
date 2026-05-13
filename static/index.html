@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AgentCore Builder</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.development.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.development.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+           background: #0f1117; color: #e2e8f0; height: 100vh; }
+    .app { display: flex; height: 100vh; }
+    .sidebar { width: 260px; background: #1a1d27; border-right: 1px solid #2d3148;
+               display: flex; flex-direction: column; padding: 16px; gap: 8px; }
+    .sidebar h2 { font-size: 14px; color: #6b7280; text-transform: uppercase;
+                  letter-spacing: 1px; margin-bottom: 8px; }
+    .agent-item { padding: 10px 12px; border-radius: 8px; cursor: pointer;
+                  border: 1px solid transparent; transition: all 0.15s; }
+    .agent-item:hover { background: #2d3148; }
+    .agent-item.active { background: #2d3148; border-color: #6366f1; }
+    .agent-item .agent-name { font-size: 14px; font-weight: 500; }
+    .agent-item .agent-status { font-size: 11px; color: #10b981; margin-top: 2px; }
+    .main { flex: 1; display: flex; flex-direction: column; }
+    .topbar { padding: 16px 24px; border-bottom: 1px solid #2d3148;
+              display: flex; align-items: center; gap: 12px; }
+    .topbar h1 { font-size: 16px; font-weight: 600; }
+    .tab-btn { padding: 6px 16px; border-radius: 6px; border: none; cursor: pointer;
+               font-size: 13px; background: transparent; color: #9ca3af; }
+    .tab-btn.active { background: #6366f1; color: white; }
+    .content { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
+
+    /* Chat */
+    .chat-area { flex: 1; overflow-y: auto; padding: 24px; display: flex;
+                 flex-direction: column; gap: 16px; }
+    .message { max-width: 75%; padding: 12px 16px; border-radius: 12px;
+               font-size: 14px; line-height: 1.6; white-space: pre-wrap; }
+    .message.user { background: #6366f1; align-self: flex-end; border-radius: 12px 12px 2px 12px; }
+    .message.assistant { background: #1e2235; align-self: flex-start;
+                         border-radius: 12px 12px 12px 2px; border: 1px solid #2d3148; }
+    .message.system { background: transparent; color: #6b7280; font-size: 12px;
+                      align-self: center; }
+    .chat-input-area { padding: 16px 24px; border-top: 1px solid #2d3148;
+                       display: flex; gap: 8px; }
+    .chat-input { flex: 1; padding: 12px 16px; background: #1e2235; border: 1px solid #2d3148;
+                  border-radius: 10px; color: #e2e8f0; font-size: 14px; resize: none;
+                  outline: none; }
+    .chat-input:focus { border-color: #6366f1; }
+    .send-btn { padding: 0 20px; background: #6366f1; border: none; border-radius: 10px;
+                color: white; cursor: pointer; font-size: 14px; font-weight: 500; }
+    .send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .new-chat-btn { padding: 6px 12px; background: transparent; border: 1px solid #2d3148;
+                    border-radius: 6px; color: #9ca3af; cursor: pointer; font-size: 12px; }
+
+    /* Build */
+    .build-area { flex: 1; overflow-y: auto; padding: 32px; }
+    .build-area h2 { font-size: 20px; font-weight: 600; margin-bottom: 24px; }
+    .form-group { margin-bottom: 20px; }
+    .form-group label { display: block; font-size: 13px; color: #9ca3af;
+                        margin-bottom: 8px; }
+    .form-group textarea, .form-group input, .form-group select {
+      width: 100%; padding: 12px 16px; background: #1e2235; border: 1px solid #2d3148;
+      border-radius: 10px; color: #e2e8f0; font-size: 14px; outline: none; }
+    .form-group textarea:focus, .form-group input:focus { border-color: #6366f1; }
+    .form-group textarea { min-height: 120px; resize: vertical; }
+    .tools-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+    .tool-chip { padding: 6px 14px; border-radius: 20px; border: 1px solid #2d3148;
+                 cursor: pointer; font-size: 13px; color: #9ca3af; transition: all 0.15s; }
+    .tool-chip.selected { background: #6366f1; border-color: #6366f1; color: white; }
+    .deploy-btn { width: 100%; padding: 14px; background: #6366f1; border: none;
+                  border-radius: 10px; color: white; font-size: 15px; font-weight: 600;
+                  cursor: pointer; margin-top: 8px; }
+    .deploy-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .status-box { padding: 16px; background: #1e2235; border-radius: 10px;
+                  border: 1px solid #2d3148; margin-top: 20px; font-size: 13px;
+                  line-height: 1.8; }
+    .status-box.success { border-color: #10b981; }
+    .status-box.error { border-color: #ef4444; }
+    .label { color: #6b7280; }
+    .val { color: #e2e8f0; }
+    .val.green { color: #10b981; }
+    .empty-state { flex: 1; display: flex; flex-direction: column; align-items: center;
+                   justify-content: center; gap: 12px; color: #4b5563; }
+    .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid #6366f1;
+               border-top-color: transparent; border-radius: 50%; animation: spin 0.7s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script src="/app-api-config.js"></script>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+
+const API_KEY = typeof window.__APP_API_KEY__ === "string" ? window.__APP_API_KEY__ : "";
+const BASE = "";
+
+const api = async (path, options = {}) => {
+  const res = await fetch(BASE + path, {
+    ...options,
+    headers: { "Content-Type": "application/json", "X-API-Key": API_KEY,
+               ...(options.headers || {}) }
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+};
+
+const AVAILABLE_TOOLS = [
+  "web-search", "aws-kb-server", "aws-pricing",
+  "aws-compliance-checker", "aws-performance-analyzer",
+  "credit-bureau-lookup", "income-document-retrieval",
+  "bank-statement-analysis", "risk-score-calculator",
+  "exception-flagger", "underwriter-summary-generator"
+];
+
+function BuildPage({ onAgentDeployed }) {
+  const [prompt, setPrompt] = useState("");
+  const [name, setName] = useState("");
+  const [tools, setTools] = useState([]);
+  const [deployConfig, setDeployConfig] = useState({
+    region: "us-east-1",
+    account_id: "",
+    role_arn: ""
+  });
+  const [status, setStatus] = useState(null);
+  const [result, setResult] = useState(null);
+
+  const toggleTool = (t) =>
+    setTools(prev => prev.includes(t) ? prev.filter(x => x !== t) : [...prev, t]);
+
+  const handleDeploy = async () => {
+    if (!prompt || !name) return;
+    setStatus("generating");
+    setResult(null);
+    try {
+      const gen = await api("/workflows/generate", {
+        method: "POST",
+        body: JSON.stringify({ prompt, tools })
+      });
+      setStatus("deploying");
+
+      const dep = await api(`/workflows/${gen.workflow_id}/deploy`, {
+        method: "POST",
+        body: JSON.stringify({
+          deployment_name: name,
+          runtime: "agentcore-docker"
+        })
+      });
+      setStatus("done");
+      setResult({ ...gen, ...dep });
+      onAgentDeployed();
+    } catch (e) {
+      setStatus("error");
+      setResult({ error: e.message });
+    }
+  };
+
+  return (
+    <div className="build-area">
+      <h2>Build & Deploy a New Agent</h2>
+
+      <div className="form-group">
+        <label>Agent Name</label>
+        <input value={name} onChange={e => setName(e.target.value)}
+               placeholder="e.g. loan-underwriter-v1" />
+      </div>
+
+      <div className="form-group">
+        <label>Describe what this agent should do</label>
+        <textarea value={prompt} onChange={e => setPrompt(e.target.value)}
+          placeholder="e.g. Create an agent that analyzes loan applications, checks credit scores, and verifies income..." />
+      </div>
+
+      <div className="form-group">
+        <label>Tools (optional)</label>
+        <div className="tools-grid">
+          {AVAILABLE_TOOLS.map(t => (
+            <span key={t} className={`tool-chip ${tools.includes(t) ? "selected" : ""}`}
+                  onClick={() => toggleTool(t)}>{t}</span>
+          ))}
+        </div>
+      </div>
+
+      <div className="form-group">
+        <label>AWS Region (informational)</label>
+        <input value={deployConfig.region} readOnly />
+      </div>
+      <div className="form-group">
+        <label>AWS Account ID (informational)</label>
+        <input value={deployConfig.account_id} readOnly
+               placeholder="from server .env" />
+      </div>
+      <div className="form-group">
+        <label>Execution Role ARN (informational)</label>
+        <input value={deployConfig.role_arn} readOnly
+               placeholder="from server .env" />
+      </div>
+
+      <button className="deploy-btn"
+              disabled={!prompt || !name || status === "generating" || status === "deploying"}
+              onClick={handleDeploy}>
+        {status === "generating" && <><span className="spinner" style={{marginRight:8}}/> Generating agent code...</>}
+        {status === "deploying" && <><span className="spinner" style={{marginRight:8}}/> Deploying to AgentCore...</>}
+        {(!status || status === "done" || status === "error") && "Generate & Deploy Agent"}
+      </button>
+
+      {result && (
+        <div className={`status-box ${status === "done" ? "success" : "error"}`}>
+          {status === "done" ? <>
+            <div><span className="label">Status: </span><span className="val green">✓ Deployed</span></div>
+            <div><span className="label">Agent ID: </span><span className="val">{result.agent_id}</span></div>
+            <div><span className="label">ARN: </span><span className="val" style={{fontSize:11}}>{result.details?.agentRuntimeArn || 'pending'}</span></div>
+            <div><span className="label">Image: </span><span className="val" style={{fontSize:11}}>{result.details?.imageUri || 'pending'}</span></div>
+            <div style={{marginTop:8}}>→ Switch to <b>Chat</b> tab and select this agent to start talking to it.</div>
+          </> : <>
+            <div style={{color:"#ef4444"}}>Deploy failed</div>
+            <div style={{fontSize:12, marginTop:8}}>{result.error}</div>
+          </>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ChatPage({ agents }) {
+  const [selectedAgent, setSelectedAgent] = useState(null);
+  const [sessionId, setSessionId] = useState(null);
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const bottomRef = useRef(null);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  const selectAgent = (agent) => {
+    setSelectedAgent(agent);
+    setSessionId(null);
+    setMessages([{
+      role: "system",
+      content: `Connected to "${agent.name}". Start chatting below.`
+    }]);
+  };
+
+  const sendMessage = async () => {
+    if (!input.trim() || !selectedAgent || loading) return;
+    const userMsg = input.trim();
+    setInput("");
+    setMessages(prev => [...prev, { role: "user", content: userMsg }]);
+    setLoading(true);
+    try {
+      const res = await api(`/chat/${selectedAgent.agent_id}/message`, {
+        method: "POST",
+        body: JSON.stringify({ message: userMsg, session_id: sessionId })
+      });
+      setSessionId(res.session_id);
+      setMessages(prev => [...prev, { role: "assistant", content: res.reply }]);
+    } catch (e) {
+      setMessages(prev => [...prev, {
+        role: "system", content: `Error: ${e.message}`
+      }]);
+    }
+    setLoading(false);
+  };
+
+  const newChat = () => {
+    setSessionId(null);
+    setMessages([{
+      role: "system",
+      content: `New conversation started with "${selectedAgent?.name}".`
+    }]);
+  };
+
+  const handleKeyDown = (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+  };
+
+  return (
+    <div style={{display:"flex", flex:1, overflow:"hidden"}}>
+      <div style={{width:220, borderRight:"1px solid #2d3148", padding:16, overflowY:"auto"}}>
+        <div style={{fontSize:12, color:"#6b7280", marginBottom:12, textTransform:"uppercase",
+                     letterSpacing:1}}>Deployed Agents</div>
+        {agents.length === 0 && (
+          <div style={{fontSize:13, color:"#4b5563"}}>
+            No agents yet. Build one first.
+          </div>
+        )}
+        {agents.map(a => (
+          <div key={a.agent_id}
+               className={`agent-item ${selectedAgent?.agent_id === a.agent_id ? "active" : ""}`}
+               onClick={() => selectAgent(a)}>
+            <div className="agent-name">{a.name}</div>
+            <div className="agent-status">● {a.status}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{flex:1, display:"flex", flexDirection:"column"}}>
+        {!selectedAgent ? (
+          <div className="empty-state">
+            <div style={{fontSize:32}}>💬</div>
+            <div>Select an agent to start chatting</div>
+          </div>
+        ) : <>
+          <div style={{padding:"12px 24px", borderBottom:"1px solid #2d3148",
+                       display:"flex", justifyContent:"space-between", alignItems:"center"}}>
+            <span style={{fontWeight:600}}>{selectedAgent.name}</span>
+            <button className="new-chat-btn" onClick={newChat}>+ New Chat</button>
+          </div>
+          <div className="chat-area">
+            {messages.map((m, i) => (
+              <div key={i} className={`message ${m.role}`}>{m.content}</div>
+            ))}
+            {loading && (
+              <div className="message assistant">
+                <span className="spinner" />
+              </div>
+            )}
+            <div ref={bottomRef} />
+          </div>
+          <div className="chat-input-area">
+            <textarea className="chat-input" rows={2} value={input}
+              onChange={e => setInput(e.target.value)} onKeyDown={handleKeyDown}
+              placeholder="Type a message... (Enter to send, Shift+Enter for newline)" />
+            <button className="send-btn" onClick={sendMessage}
+                    disabled={!input.trim() || loading}>Send</button>
+          </div>
+        </>}
+      </div>
+    </div>
+  );
+}
+
+function App() {
+  const [tab, setTab] = useState("chat");
+  const [agents, setAgents] = useState([]);
+
+  const loadAgents = async () => {
+    try {
+      const data = await api("/agents");
+      setAgents(data.agents || []);
+    } catch (e) { console.error(e); }
+  };
+
+  useEffect(() => { loadAgents(); }, []);
+
+  return (
+    <div className="app">
+      <div className="main">
+        <div className="topbar">
+          <h1>🤖 AgentCore Builder</h1>
+          <button className={`tab-btn ${tab === "build" ? "active" : ""}`}
+                  onClick={() => setTab("build")}>Build</button>
+          <button className={`tab-btn ${tab === "chat" ? "active" : ""}`}
+                  onClick={() => setTab("chat")}>Chat</button>
+        </div>
+        <div className="content">
+          {tab === "build"
+            ? <BuildPage onAgentDeployed={loadAgents} />
+            : <ChatPage agents={agents} />}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
