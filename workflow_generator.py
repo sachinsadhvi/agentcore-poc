@@ -5,7 +5,7 @@ Converts natural language prompts into workflow schemas using LLM
 
 import json
 from typing import Dict, List, Any
-import anthropic
+from openai import OpenAI
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -13,8 +13,8 @@ load_dotenv()
 class WorkflowGenerator:
     def __init__(self, tool_registry):
         self.tool_registry = tool_registry
-        self.client = anthropic.Anthropic()
-        self.model = "claude-haiku-4-5-20251001"
+        self.client = OpenAI()
+        self.model = "gpt-4o-mini"
 
     async def generate(
         self,
@@ -63,7 +63,7 @@ You MUST output a valid JSON workflow schema following this EXACT structure:
                 "id": "agent-unique-id",
                 "name": "Agent Name",
                 "role": "What this agent does in one sentence",
-                "model": "claude-haiku-4-5-20251001",
+                "model": "gpt-4o-mini",
                 "instructions": "Detailed system prompt — see INSTRUCTION RULES below",
                 "tools": [],
                 "temperature": 0.1
@@ -122,18 +122,17 @@ REQUIREMENTS:
 Generate the workflow schema as valid JSON:"""
 
         try:
-            # Call Claude to generate workflow
-            message = self.client.messages.create(
+            completion = self.client.chat.completions.create(
                 model=self.model,
                 max_tokens=4000,
-                system=system_prompt,
+                temperature=0.1,
                 messages=[
-                    {"role": "user", "content": user_message}
-                ]
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_message},
+                ],
             )
 
-            # Extract JSON from response
-            response_text = message.content[0].text
+            response_text = completion.choices[0].message.content or ""
 
             # Strip markdown fences if present
             if response_text.startswith("```"):

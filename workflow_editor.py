@@ -172,7 +172,7 @@ class WorkflowEditor:
         agent_role: str,
         tools: List[str] = None,
         instructions: str = None,
-        model: str = "claude-opus-4-1",
+        model: str = "gpt-4o-mini",
         temperature: float = 0.7
     ) -> Dict[str, Any]:
         """

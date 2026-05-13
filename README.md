@@ -7,7 +7,7 @@ A Proof of Concept system that converts natural language prompts into executable
 ```
 User Input (Natural Language)
     ↓
-[Workflow Generator Agent] (Claude Opus)
+[Workflow Generator] (OpenAI, e.g. `gpt-4o-mini`)
     ↓
 [Workflow Schema] (JSON)
     ↓
@@ -40,7 +40,7 @@ User Input (Natural Language)
 - Python 3.11+
 - Docker (for building/pushing images)
 - AWS Account with ECR access
-- Anthropic API key (Claude Haiku 4.5)
+- OpenAI API key (used for workflow generation from natural language and for LLM calls in Docker-deployed workflows; default model `gpt-4o-mini`)
 
 ### Installation
 
@@ -61,12 +61,14 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-4. **Set environment variables**:
+4. **Set environment variables** (see `.env.example` for the full list):
 ```bash
-export ANTHROPIC_API_KEY="your-api-key-here"
+export OPENAI_API_KEY="your-openai-api-key-here"
 export AWS_DEFAULT_REGION="us-east-1"
 export AWS_ACCOUNT_ID="677276078734"
 ```
+
+**Notes:** `OPENAI_API_KEY` is forwarded into the AgentCore container so deployed workflows can call the OpenAI API. Native Bedrock Agent creation in this repo uses **Amazon Nova** on Bedrock (your AWS credentials), not the OpenAI API.
 
 ## Running the POC
 
@@ -284,7 +286,7 @@ blueprint-poc/
         "id": "agent-analyzer",
         "name": "Requirements Analyzer",
         "role": "Analyze user requirements",
-        "model": "claude-opus-4-1",
+        "model": "gpt-4o-mini",
         "instructions": "Parse and structure user requirements...",
         "tools": ["aws-kb-server"],
         "temperature": 0.7
@@ -293,7 +295,7 @@ blueprint-poc/
         "id": "agent-selector",
         "name": "Service Selector",
         "role": "Select optimal AWS services",
-        "model": "claude-opus-4-1",
+        "model": "gpt-4o-mini",
         "instructions": "Map requirements to AWS services...",
         "tools": ["aws-kb-server", "aws-pricing"],
         "temperature": 0.5
@@ -431,9 +433,9 @@ kill -9 <PID>
 ```
 
 ### Workflow Generation Fails
-- Check ANTHROPIC_API_KEY is set
-- Verify Claude Opus model is available
-- Check API rate limits
+- Check `OPENAI_API_KEY` is set in the environment (or in `.env` loaded before `main.py` runs)
+- Confirm your account can use the configured model (default `gpt-4o-mini` in `workflow_generator.py`)
+- Check OpenAI API rate limits and billing
 
 ### Docker Build Fails
 - Ensure Docker daemon is running

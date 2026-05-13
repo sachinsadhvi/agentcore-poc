@@ -15,7 +15,6 @@ import shutil
 from pathlib import Path
 import boto3
 from botocore.exceptions import ClientError
-import anthropic
 
 
 def _sanitize_agent_runtime_name(name: str) -> str:
@@ -433,7 +432,7 @@ class DeploymentManager:
             response = self.bedrock_agent_client.create_agent(
                 agentName=agent_name.replace(" ", "-")[:50],
                 agentResourceRoleArn=role_arn,
-                foundationModel="anthropic.claude-haiku-4-5-20251001",
+                foundationModel="amazon.nova-pro-v1:0",
                 description=description,
                 idleSessionTTLInSeconds=900,
                 instruction="You are an AI agent that processes and analyzes workflow tasks. Use the available tools to complete the assigned work and provide detailed results."
@@ -447,13 +446,10 @@ class DeploymentManager:
     def _build_runtime_environment(self) -> Dict[str, str]:
         """Collect environment variables to pass into the AgentCore container.
 
-        The deployed container needs credentials for any LLM SDKs it imports
-        (e.g. anthropic.Anthropic() looks up ANTHROPIC_API_KEY at construction).
-        We forward a curated allow-list of env vars from the host process so the
-        container can call those services without baking secrets into the image.
+        The deployed container needs OPENAI_API_KEY for the OpenAI SDK used by
+        generated workflow code. We forward a curated allow-list from the host.
         """
         forward_keys = [
-            "ANTHROPIC_API_KEY",
             "OPENAI_API_KEY",
             "AWS_DEFAULT_REGION",
         ]
@@ -463,12 +459,12 @@ class DeploymentManager:
             if v:
                 env[k] = v
 
-        if "ANTHROPIC_API_KEY" not in env:
-            print("[WARN] ANTHROPIC_API_KEY is not set in this process; agents that call "
-                  "Anthropic will fail at runtime. Set it in .env and redeploy.")
+        if "OPENAI_API_KEY" not in env:
+            print("[WARN] OPENAI_API_KEY is not set in this process; deployed agents that "
+                  "call OpenAI will fail at runtime. Set it in .env and redeploy.")
         else:
-            masked = env["ANTHROPIC_API_KEY"][:6] + "..." + env["ANTHROPIC_API_KEY"][-4:]
-            print(f"[*] Forwarding ANTHROPIC_API_KEY to runtime ({masked})")
+            masked = env["OPENAI_API_KEY"][:6] + "..." + env["OPENAI_API_KEY"][-4:]
+            print(f"[*] Forwarding OPENAI_API_KEY to runtime ({masked})")
         return env
 
     def _create_agentcore_runtime(self, deployment_name: str, image_uri: str, role_arn: str) -> Dict[str, Any]:
@@ -618,7 +614,7 @@ class DeploymentManager:
             response = self.bedrock_agent_client.create_agent(
                 agentName=agent_name.replace(" ", "-")[:50],
                 agentResourceRoleArn=role_arn,
-                foundationModel="anthropic.claude-haiku-4-5-20251001",
+                foundationModel="amazon.nova-pro-v1:0",
                 description=description,
                 idleSessionTTLInSeconds=900,
                 instruction=agent_schema.get("unified_instruction", "Process the workflow"),
@@ -695,13 +691,19 @@ class DeploymentManager:
                 .replace("\n", "\\n")
                 .replace("\r", "\\r")
             )
+            agent_model = agent.get("model") or "gpt-4o-mini"
+            safe_model = (
+                agent_model
+                .replace("\\", "\\\\")
+                .replace(chr(34), chr(92) + chr(34))
+            )
 
             agents_code += f'''
 # Agent: {agent_name}
 def agent_{agent_id.replace("-", "_")}(state: dict) -> dict:
     """Execute {agent_name} agent"""
     try:
-        client = anthropic.Anthropic()
+        client = OpenAI()
 
         # Split state into original input and previous agent outputs.
         # Agents receive BOTH so each step can build on prior work.
@@ -732,15 +734,17 @@ def agent_{agent_id.replace("-", "_")}(state: dict) -> dict:
             "{safe_instructions}"
         )
 
-        response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
+        response = client.chat.completions.create(
+            model="{safe_model}",
             max_tokens=1500,
             temperature=0.1,
-            system=system_prompt,
-            messages=[{{"role": "user", "content": user_message}}]
+            messages=[
+                {{"role": "system", "content": system_prompt}},
+                {{"role": "user", "content": user_message}},
+            ],
         )
 
-        state["{agent_id}_result"] = response.content[0].text
+        state["{agent_id}_result"] = (response.choices[0].message.content or "")
         return state
     except Exception as e:
         state["{agent_id}_error"] = str(e)
@@ -758,7 +762,7 @@ import json
 import os
 from typing import Dict, Any
 from dotenv import load_dotenv
-import anthropic
+from openai import OpenAI
 
 load_dotenv()
 
@@ -890,7 +894,7 @@ CMD ["uvicorn", "handler:app", "--host", "0.0.0.0", "--port", "8080"]
         return '''fastapi==0.104.1
 uvicorn==0.24.0
 pydantic==2.7.4
-anthropic==0.39.0
+openai>=1.40.0
 boto3==1.43.6
 python-dotenv==1.0.0
 langgraph==0.2.27
