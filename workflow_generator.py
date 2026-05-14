@@ -101,11 +101,17 @@ AGENT INSTRUCTION RULES — every "instructions" field MUST follow this pattern:
 - One sentence: "Base your analysis only on the input data provided; never invent or assume values not present."
 - One sentence describing the exact output format (e.g. "Output a JSON object with fields: risk_level, reasons, recommendation").
 
+VALIDATION / INTAKE / ANALYSIS — default to **best-effort analysis**, not all-or-nothing rejection:
+- Prefer agents that **analyze and score** from whatever fields exist; list absent fields under `data_gaps` or `not_available` (array of strings) instead of failing the whole run.
+- Only use strict `is_valid` / `missing_fields` when the USER explicitly asked for schema or compliance gatekeeping. Then: `missing_fields` must list only **blocking** required paths that are actually absent; never return empty `missing_fields` with `is_valid: false`.
+- "If optional context is missing, continue with caveats (e.g. `confidence`: LOW) rather than declaring the order or transaction invalid."
+- "Ignore any existing validation subtree in Input Data; do not copy validation.is_valid from Input Data into your output."
+
 GOOD EXAMPLE (ecommerce fraud):
 "You are a transaction risk evaluator. Read these fields from the input data: user.account_age_days, user.chargebacks, payment.address_mismatch, payment.is_first_time_card, payment.transaction_status. Base your analysis only on the input data provided; never invent or assume values not present. Output a JSON object with fields: risk_level (LOW/MEDIUM/HIGH), risk_factors (list of strings), and recommended_action (APPROVE/REVIEW/BLOCK)."
 
 GOOD EXAMPLE (loan intake):
-"You are a loan application intake agent. Read these fields: applicant.name, applicant.loan_amount, applicant.income, applicant.credit_score, applicant.employment_years. Base your analysis only on the input data provided; never invent or assume values not present. Output a JSON object with fields: dti_ratio (calculated), completeness (COMPLETE/INCOMPLETE), missing_fields (list), and initial_assessment (one sentence)."
+"You are a loan application intake agent. Read these fields when present: applicant.name, applicant.loan_amount, applicant.income, applicant.credit_score, applicant.employment_years. Base your analysis only on the input data provided; never invent or assume values not present. Output a JSON object with fields: fields_present (list), data_gaps (list of missing non-critical paths), completeness (COMPLETE if all listed fields exist else PARTIAL), dti_ratio (number or null if income/loan missing), and initial_assessment (one sentence summarizing what you could conclude from partial data)."
 """
 
         user_message = f"""Generate a workflow schema for the following request:
@@ -118,6 +124,7 @@ REQUIREMENTS:
 - Workflow type: serial pipeline (each agent's output feeds the next)
 - tools and suggested_tools MUST be empty lists []
 - Follow the INSTRUCTION RULES exactly for every agent's instructions field
+- Default to best-effort analysis from partial input; strict all-fields-required validation only if the user explicitly asks for it
 
 Generate the workflow schema as valid JSON:"""
 

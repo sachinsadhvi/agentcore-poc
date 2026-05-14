@@ -64,10 +64,6 @@
       border-radius: 10px; color: #e2e8f0; font-size: 14px; outline: none; }
     .form-group textarea:focus, .form-group input:focus { border-color: #6366f1; }
     .form-group textarea { min-height: 120px; resize: vertical; }
-    .tools-grid { display: flex; flex-wrap: wrap; gap: 8px; }
-    .tool-chip { padding: 6px 14px; border-radius: 20px; border: 1px solid #2d3148;
-                 cursor: pointer; font-size: 13px; color: #9ca3af; transition: all 0.15s; }
-    .tool-chip.selected { background: #6366f1; border-color: #6366f1; color: white; }
     .deploy-btn { width: 100%; padding: 14px; background: #6366f1; border: none;
                   border-radius: 10px; color: white; font-size: 15px; font-weight: 600;
                   cursor: pointer; margin-top: 8px; }
@@ -82,6 +78,16 @@
     .val.green { color: #10b981; }
     .empty-state { flex: 1; display: flex; flex-direction: column; align-items: center;
                    justify-content: center; gap: 12px; color: #4b5563; }
+    .sample-wrap { margin-top: 16px; padding-top: 16px; border-top: 1px solid #2d3148; }
+    .sample-wrap h3 { font-size: 13px; color: #9ca3af; font-weight: 600; margin-bottom: 8px; }
+    .sample-note { font-size: 12px; color: #94a3b8; margin-bottom: 8px; line-height: 1.5; }
+    .sample-toolbar { display: flex; justify-content: flex-end; margin-bottom: 6px; }
+    .copy-btn { padding: 6px 12px; background: #2d3148; border: 1px solid #3d4158;
+                border-radius: 6px; color: #e2e8f0; font-size: 12px; cursor: pointer; }
+    .copy-btn:hover { background: #3d4158; }
+    .sample-pre { margin: 0; padding: 12px; background: #0a0c12; border: 1px solid #2d3148;
+                   border-radius: 8px; font-size: 12px; line-height: 1.45; overflow-x: auto;
+                   color: #a5b4fc; max-height: 280px; overflow-y: auto; }
     .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid #6366f1;
                border-top-color: transparent; border-radius: 50%; animation: spin 0.7s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
@@ -106,18 +112,52 @@ const api = async (path, options = {}) => {
   return res.json();
 };
 
-const AVAILABLE_TOOLS = [
-  "web-search", "aws-kb-server", "aws-pricing",
-  "aws-compliance-checker", "aws-performance-analyzer",
-  "credit-bureau-lookup", "income-document-retrieval",
-  "bank-statement-analysis", "risk-score-calculator",
-  "exception-flagger", "underwriter-summary-generator"
-];
+function formatJsonSample(obj) {
+  try {
+    return JSON.stringify(obj, null, 2);
+  } catch (e) {
+    return String(obj);
+  }
+}
 
-function BuildPage({ onAgentDeployed }) {
+function SamplePayloadPanel({ title, sample, compact }) {
+  const [copied, setCopied] = useState(false);
+  if (!sample || typeof sample !== "object") return null;
+  const note = sample._note;
+  const body = { ...sample };
+  if (note) delete body._note;
+  const text = formatJsonSample(Object.keys(body).length ? body : sample);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+  return (
+    <div className={compact ? "" : "sample-wrap"}>
+      {!compact && <h3>{title || "Sample invocation JSON"}</h3>}
+      {note && <div className="sample-note">{note}</div>}
+      <div className="sample-toolbar">
+        <button type="button" className="copy-btn" onClick={copy}>
+          {copied ? "Copied" : "Copy JSON"}
+        </button>
+      </div>
+      <pre className="sample-pre">{text}</pre>
+      {!compact && (
+        <div className="sample-note" style={{ marginTop: 8 }}>
+          Use this object as the request body when invoking AgentCore (same shape as <code>Input Data</code> in the runtime).
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BuildPage({ onWorkflowDeployed }) {
   const [prompt, setPrompt] = useState("");
   const [name, setName] = useState("");
-  const [tools, setTools] = useState([]);
   const [deployConfig, setDeployConfig] = useState({
     region: "us-east-1",
     account_id: "",
@@ -126,9 +166,6 @@ function BuildPage({ onAgentDeployed }) {
   const [status, setStatus] = useState(null);
   const [result, setResult] = useState(null);
 
-  const toggleTool = (t) =>
-    setTools(prev => prev.includes(t) ? prev.filter(x => x !== t) : [...prev, t]);
-
   const handleDeploy = async () => {
     if (!prompt || !name) return;
     setStatus("generating");
@@ -136,7 +173,7 @@ function BuildPage({ onAgentDeployed }) {
     try {
       const gen = await api("/workflows/generate", {
         method: "POST",
-        body: JSON.stringify({ prompt, tools })
+        body: JSON.stringify({ prompt })
       });
       setStatus("deploying");
 
@@ -149,7 +186,7 @@ function BuildPage({ onAgentDeployed }) {
       });
       setStatus("done");
       setResult({ ...gen, ...dep });
-      onAgentDeployed();
+      onWorkflowDeployed();
     } catch (e) {
       setStatus("error");
       setResult({ error: e.message });
@@ -158,29 +195,32 @@ function BuildPage({ onAgentDeployed }) {
 
   return (
     <div className="build-area">
-      <h2>Build & Deploy a New Agent</h2>
+      <h2>Build & deploy a workflow</h2>
 
       <div className="form-group">
-        <label>Agent Name</label>
+        <label>Workflow name</label>
         <input value={name} onChange={e => setName(e.target.value)}
                placeholder="e.g. loan-underwriter-v1" />
-      </div>
-
-      <div className="form-group">
-        <label>Describe what this agent should do</label>
-        <textarea value={prompt} onChange={e => setPrompt(e.target.value)}
-          placeholder="e.g. Create an agent that analyzes loan applications, checks credit scores, and verifies income..." />
-      </div>
-
-      <div className="form-group">
-        <label>Tools (optional)</label>
-        <div className="tools-grid">
-          {AVAILABLE_TOOLS.map(t => (
-            <span key={t} className={`tool-chip ${tools.includes(t) ? "selected" : ""}`}
-                  onClick={() => toggleTool(t)}>{t}</span>
-          ))}
+        <div style={{ fontSize: 11, color: "#6b7280", marginTop: 6, lineHeight: 1.4 }}>
+          Shown in chat and passed to AWS as the deployment name. The server normalizes it for the
+          Docker/ECR image name (so spaces or hyphens next to spaces do not break deployment).
         </div>
       </div>
+
+      <div className="form-group">
+        <label>Describe what this workflow should do</label>
+        <textarea value={prompt} onChange={e => setPrompt(e.target.value)}
+          placeholder="e.g. Create a workflow that analyzes loan applications, checks credit scores, and verifies income..." />
+      </div>
+
+      <p style={{ fontSize: 12, color: "#6b7280", marginTop: -8, marginBottom: 16, lineHeight: 1.5 }}>
+        <b>AgentCore built-ins (runtime):</b> Amazon Bedrock AgentCore exposes two managed tools —{" "}
+        <code style={{ color: "#a5b4fc" }}>Browser</code> (web / apps) and{" "}
+        <code style={{ color: "#a5b4fc" }}>Code Interpreter</code> (Python sandbox). Enable them on
+        your runtime in AWS; this generated container currently calls OpenAI only unless you
+        wire the AgentCore SDK into the handler. Mention URLs or code execution in your prompt if you
+        plan to attach the Browser or Code Interpreter built-ins in AgentCore.
+      </p>
 
       <div className="form-group">
         <label>AWS Region (informational)</label>
@@ -200,19 +240,25 @@ function BuildPage({ onAgentDeployed }) {
       <button className="deploy-btn"
               disabled={!prompt || !name || status === "generating" || status === "deploying"}
               onClick={handleDeploy}>
-        {status === "generating" && <><span className="spinner" style={{marginRight:8}}/> Generating agent code...</>}
+        {status === "generating" && <><span className="spinner" style={{marginRight:8}}/> Generating workflow...</>}
         {status === "deploying" && <><span className="spinner" style={{marginRight:8}}/> Deploying to AgentCore...</>}
-        {(!status || status === "done" || status === "error") && "Generate & Deploy Agent"}
+        {(!status || status === "done" || status === "error") && "Generate & deploy workflow"}
       </button>
 
       {result && (
         <div className={`status-box ${status === "done" ? "success" : "error"}`}>
           {status === "done" ? <>
             <div><span className="label">Status: </span><span className="val green">✓ Deployed</span></div>
-            <div><span className="label">Agent ID: </span><span className="val">{result.agent_id}</span></div>
+            <div><span className="label">Runtime / chat ID: </span><span className="val">{result.agent_id}</span></div>
             <div><span className="label">ARN: </span><span className="val" style={{fontSize:11}}>{result.details?.agentRuntimeArn || 'pending'}</span></div>
             <div><span className="label">Image: </span><span className="val" style={{fontSize:11}}>{result.details?.imageUri || 'pending'}</span></div>
-            <div style={{marginTop:8}}>→ Switch to <b>Chat</b> tab and select this agent to start talking to it.</div>
+            <div style={{marginTop:8}}>→ Switch to <b>Chat</b> tab and select this workflow to start.</div>
+            {result.sample_invocation && Object.keys(result.sample_invocation).length > 0 && (
+              <SamplePayloadPanel
+                title="Sample payload for this workflow"
+                sample={result.sample_invocation}
+              />
+            )}
           </> : <>
             <div style={{color:"#ef4444"}}>Deploy failed</div>
             <div style={{fontSize:12, marginTop:8}}>{result.error}</div>
@@ -238,9 +284,12 @@ function ChatPage({ agents }) {
   const selectAgent = (agent) => {
     setSelectedAgent(agent);
     setSessionId(null);
+    const extra = agent.sample_invocation && Object.keys(agent.sample_invocation).length
+      ? "\n\nA sample JSON body for direct invocation is shown in the panel on the right."
+      : "";
     setMessages([{
       role: "system",
-      content: `Connected to "${agent.name}". Start chatting below.`
+      content: `Connected to "${agent.name}". Start chatting below.${extra}`
     }]);
   };
 
@@ -267,9 +316,12 @@ function ChatPage({ agents }) {
 
   const newChat = () => {
     setSessionId(null);
+    const extra = selectedAgent?.sample_invocation && Object.keys(selectedAgent.sample_invocation).length
+      ? "\n\nA sample JSON body for direct invocation is shown in the panel on the right."
+      : "";
     setMessages([{
       role: "system",
-      content: `New conversation started with "${selectedAgent?.name}".`
+      content: `New conversation started with "${selectedAgent?.name}".${extra}`
     }]);
   };
 
@@ -281,10 +333,10 @@ function ChatPage({ agents }) {
     <div style={{display:"flex", flex:1, overflow:"hidden"}}>
       <div style={{width:220, borderRight:"1px solid #2d3148", padding:16, overflowY:"auto"}}>
         <div style={{fontSize:12, color:"#6b7280", marginBottom:12, textTransform:"uppercase",
-                     letterSpacing:1}}>Deployed Agents</div>
+                     letterSpacing:1}}>Deployed workflows</div>
         {agents.length === 0 && (
           <div style={{fontSize:13, color:"#4b5563"}}>
-            No agents yet. Build one first.
+            No workflows yet. Build one on the Build tab first.
           </div>
         )}
         {agents.map(a => (
@@ -297,11 +349,11 @@ function ChatPage({ agents }) {
         ))}
       </div>
 
-      <div style={{flex:1, display:"flex", flexDirection:"column"}}>
+      <div style={{flex:1, display:"flex", flexDirection:"column", minWidth:0}}>
         {!selectedAgent ? (
           <div className="empty-state">
             <div style={{fontSize:32}}>💬</div>
-            <div>Select an agent to start chatting</div>
+            <div>Select a workflow to start chatting</div>
           </div>
         ) : <>
           <div style={{padding:"12px 24px", borderBottom:"1px solid #2d3148",
@@ -309,23 +361,41 @@ function ChatPage({ agents }) {
             <span style={{fontWeight:600}}>{selectedAgent.name}</span>
             <button className="new-chat-btn" onClick={newChat}>+ New Chat</button>
           </div>
-          <div className="chat-area">
-            {messages.map((m, i) => (
-              <div key={i} className={`message ${m.role}`}>{m.content}</div>
-            ))}
-            {loading && (
-              <div className="message assistant">
-                <span className="spinner" />
+          <div style={{display:"flex", flex:1, overflow:"hidden", minHeight:0}}>
+            <div style={{flex:1, display:"flex", flexDirection:"column", minWidth:0}}>
+              <div className="chat-area">
+                {messages.map((m, i) => (
+                  <div key={i} className={`message ${m.role}`}>{m.content}</div>
+                ))}
+                {loading && (
+                  <div className="message assistant">
+                    <span className="spinner" />
+                  </div>
+                )}
+                <div ref={bottomRef} />
+              </div>
+              <div className="chat-input-area">
+                <textarea className="chat-input" rows={2} value={input}
+                  onChange={e => setInput(e.target.value)} onKeyDown={handleKeyDown}
+                  placeholder="Type a message... (Enter to send, Shift+Enter for newline)" />
+                <button className="send-btn" onClick={sendMessage}
+                        disabled={!input.trim() || loading}>Send</button>
+              </div>
+            </div>
+            {selectedAgent.sample_invocation && Object.keys(selectedAgent.sample_invocation).length > 0 && (
+              <div style={{
+                width: 320,
+                flexShrink: 0,
+                borderLeft: "1px solid #2d3148",
+                padding: 16,
+                overflowY: "auto",
+                background: "#141720"
+              }}>
+                <div style={{ fontSize: 12, color: "#6b7280", textTransform: "uppercase",
+                              letterSpacing: 1, marginBottom: 10 }}>Sample invoke JSON</div>
+                <SamplePayloadPanel compact sample={selectedAgent.sample_invocation} />
               </div>
             )}
-            <div ref={bottomRef} />
-          </div>
-          <div className="chat-input-area">
-            <textarea className="chat-input" rows={2} value={input}
-              onChange={e => setInput(e.target.value)} onKeyDown={handleKeyDown}
-              placeholder="Type a message... (Enter to send, Shift+Enter for newline)" />
-            <button className="send-btn" onClick={sendMessage}
-                    disabled={!input.trim() || loading}>Send</button>
           </div>
         </>}
       </div>
@@ -358,7 +428,7 @@ function App() {
         </div>
         <div className="content">
           {tab === "build"
-            ? <BuildPage onAgentDeployed={loadAgents} />
+            ? <BuildPage onWorkflowDeployed={loadAgents} />
             : <ChatPage agents={agents} />}
         </div>
       </div>

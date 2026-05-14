@@ -9,5 +9,7 @@ langchain==0.2.16
 langchain-core==0.2.39
 langchain-community==0.2.16
 httpx==0.25.2
+playwright>=1.40.0
+bedrock-agentcore
 streamlit==1.28.1
 python-multipart>=0.0.6

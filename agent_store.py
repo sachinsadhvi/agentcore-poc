@@ -1,10 +1,19 @@
-from typing import Optional
+from typing import Any, Dict, Optional
 import uuid
 from datetime import datetime
 
 _agents: dict = {}
 
-def save_agent(name, prompt, agent_arn, agent_runtime_endpoint, image_uri, region, tools) -> dict:
+def save_agent(
+    name,
+    prompt,
+    agent_arn,
+    agent_runtime_endpoint,
+    image_uri,
+    region,
+    tools,
+    sample_invocation: Optional[Dict[str, Any]] = None,
+) -> dict:
     agent_id = f"agent-{str(uuid.uuid4())[:8]}"
     record = {
         "agent_id": agent_id,
@@ -15,6 +24,7 @@ def save_agent(name, prompt, agent_arn, agent_runtime_endpoint, image_uri, regio
         "image_uri": image_uri,
         "region": region,
         "tools": tools,
+        "sample_invocation": sample_invocation or {},
         "status": "READY",
         "created_at": datetime.utcnow().isoformat(),
         "console_url": f"https://{region}.console.aws.amazon.com/bedrock-agentcore/agents?agentArn={agent_arn}"

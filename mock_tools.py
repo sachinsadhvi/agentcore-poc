@@ -6,16 +6,23 @@ Also exposes a string-keyed dispatcher `execute_tool(tool_name, state)` that the
 generated LangGraph workflow uses to call tools by their workflow-schema name
 (e.g. "credit-bureau-lookup", "risk-score-calculator", etc.).
 
+The ``browser`` / ``web-search`` tools fetch pages via Playwright CDP to AgentCore Browser
+(see AWS docs: ``browser_session`` + ``connect_over_cdp``) when credentials or a CDP
+WebSocket URL are available; otherwise they fall back to httpx.
+
 Design principle: tools ALWAYS prefer real applicant data already in state over
 random generation. When data must be synthesised, it is seeded deterministically
 from the applicant identifier so results are stable across multiple tool calls
 within the same workflow run.
 """
 
+import json
+import os
 import random
+import re
 import hashlib
 from datetime import datetime
-from typing import Dict, Any, List
+from typing import Any, Dict, List, Optional
 
 
 def _applicant_id(state: Dict[str, Any]) -> str:
@@ -455,6 +462,221 @@ def _aws_kb_server(state: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _extract_fetch_urls(state: Dict[str, Any]) -> List[str]:
+    """Collect HTTP(S) URLs from common workflow input keys."""
+    urls: List[str] = []
+    if not isinstance(state, dict):
+        return urls
+    tu = state.get("target_urls")
+    if isinstance(tu, list):
+        for u in tu:
+            if isinstance(u, str) and u.startswith(("http://", "https://")):
+                urls.append(u.strip())
+    for key in ("url", "browser_url", "website_url", "page_url"):
+        u = state.get(key)
+        if isinstance(u, str) and u.startswith(("http://", "https://")):
+            urls.append(u.strip())
+    seen: set[str] = set()
+    out: List[str] = []
+    for u in urls:
+        if u not in seen:
+            seen.add(u)
+            out.append(u)
+    return out
+
+
+def _strip_html_to_text(html: str, max_len: int = 120_000) -> str:
+    if not html:
+        return ""
+    t = re.sub(r"(?is)<script[^>]*>.*?</script>", " ", html)
+    t = re.sub(r"(?is)<style[^>]*>.*?</style>", " ", t)
+    t = re.sub(r"(?s)<[^>]+>", " ", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    return t[:max_len]
+
+
+def _fetch_robots_txt_excerpt(state: Dict[str, Any]) -> Optional[str]:
+    ru = state.get("robots_txt_url") if isinstance(state, dict) else None
+    if not isinstance(ru, str) or not ru.startswith(("http://", "https://")):
+        return None
+    try:
+        import httpx
+
+        r = httpx.get(ru, timeout=15.0, follow_redirects=True)
+        if r.status_code == 200:
+            return (r.text or "")[:8000]
+        return f"(robots.txt HTTP {r.status_code})"
+    except Exception as e:
+        return f"(robots.txt fetch failed: {e})"
+
+
+def _fetch_url_httpx(url: str) -> Dict[str, Any]:
+    import httpx
+
+    headers = {
+        "User-Agent": os.environ.get(
+            "BLUEPRINT_FETCH_USER_AGENT",
+            "BlueprintPOC/1.0 (+https://github.com/aws-samples; research)",
+        )
+    }
+    try:
+        r = httpx.get(url, timeout=30.0, follow_redirects=True, headers=headers)
+        text = _strip_html_to_text(r.text or "")
+        return {
+            "fetched_content": text or "(empty response body)",
+            "fetched_url": str(r.url),
+            "http_status": r.status_code,
+            "blocked_pages": [],
+            "pagination_info": "Not available in provided data",
+            "auth_required": r.status_code in (401, 403),
+            "browser_source": "httpx",
+        }
+    except Exception as e:
+        return {
+            "fetched_content": "Not available in provided data",
+            "fetch_error": str(e),
+            "fetched_url": url,
+            "blocked_pages": [],
+            "pagination_info": "Not available in provided data",
+            "auth_required": False,
+            "browser_source": "httpx-error",
+        }
+
+
+def _fetch_url_playwright_agentcore(url: str) -> Optional[Dict[str, Any]]:
+    """Use Playwright over AgentCore Browser CDP (official pattern).
+
+    1) If ``AGENTCORE_BROWSER_CDP_WS_URL`` or ``AGENTCORE_AUTOMATION_WS_URL`` is set (e.g. injected
+       by AgentCore Runtime UI), connect with optional ``AGENTCORE_BROWSER_CDP_HEADERS_JSON``.
+    2) Else use ``bedrock_agentcore.tools.browser_client.browser_session`` + ``generate_ws_headers()``
+       (requires IAM + ``bedrock-agentcore`` package + managed Browser in the account).
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return None
+
+    ws_url = os.environ.get("AGENTCORE_BROWSER_CDP_WS_URL") or os.environ.get(
+        "AGENTCORE_AUTOMATION_WS_URL"
+    )
+    headers: Optional[Dict[str, str]] = None
+    raw_h = os.environ.get("AGENTCORE_BROWSER_CDP_HEADERS_JSON")
+    if raw_h:
+        try:
+            parsed = json.loads(raw_h)
+            if isinstance(parsed, dict):
+                headers = {str(k): str(v) for k, v in parsed.items()}
+        except json.JSONDecodeError:
+            pass
+
+    if not ws_url:
+        try:
+            from bedrock_agentcore.tools.browser_client import browser_session
+
+            region = os.environ.get("AWS_DEFAULT_REGION") or os.environ.get("AWS_REGION") or "us-east-1"
+            with browser_session(region) as bclient:
+                ws_url, hdrs = bclient.generate_ws_headers()
+                if hdrs and isinstance(hdrs, dict):
+                    headers = {str(k): str(v) for k, v in hdrs.items()}
+        except Exception:
+            return None
+
+    if not ws_url:
+        return None
+
+    out: Dict[str, Any] = {}
+    try:
+        with sync_playwright() as p:
+            connect_kw: Dict[str, Any] = {}
+            if headers:
+                connect_kw["headers"] = headers
+            browser = p.chromium.connect_over_cdp(ws_url, **connect_kw)
+            try:
+                context = browser.contexts[0] if browser.contexts else browser.new_context()
+                page = context.pages[0] if context.pages else context.new_page()
+                page.goto(url, wait_until="domcontentloaded", timeout=60_000)
+                html = page.content()
+                text = _strip_html_to_text(html)
+                out = {
+                    "fetched_content": text or "(empty body)",
+                    "fetched_html": (html or "")[:80_000],
+                    "fetched_url": page.url,
+                    "page_title": page.title(),
+                    "http_status": 200,
+                    "blocked_pages": [],
+                    "pagination_info": "Not available in provided data",
+                    "auth_required": False,
+                    "browser_source": "playwright-agentcore-cdp",
+                }
+            finally:
+                browser.close()
+        return out
+    except Exception as e:
+        return {
+            "fetch_error": str(e),
+            "fetched_url": url,
+            "browser_source": "playwright-agentcore-cdp-error",
+        }
+
+
+def _browser_tool(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Fetch web content: AgentCore Browser (Playwright CDP) when available, else httpx.
+
+    Matches AWS docs: ``chromium.connect_over_cdp(ws_url, headers=headers)`` after
+    ``browser_session(region).generate_ws_headers()`` or a presigned automation WS URL in env.
+    """
+    urls = _extract_fetch_urls(state if isinstance(state, dict) else {})
+    goal = ""
+    if isinstance(state, dict):
+        goal = str(state.get("goal") or state.get("browser_goal") or state.get("prompt") or "")
+
+    if not urls:
+        return {
+            "fetched_content": "Not available in provided data",
+            "blocked_pages": [],
+            "pagination_info": "Not available in provided data",
+            "auth_required": False,
+            "fetch_error": "No target_urls / url / browser_url with http(s) in input state.",
+            "browser_source": "none",
+            "goal": goal,
+        }
+
+    primary = urls[0]
+    robots_ex = _fetch_robots_txt_excerpt(state if isinstance(state, dict) else {})
+
+    pw_result = _fetch_url_playwright_agentcore(primary)
+    if pw_result and not pw_result.get("fetch_error") and pw_result.get("fetched_content"):
+        if robots_ex:
+            pw_result["robots_txt_excerpt"] = robots_ex
+        if goal:
+            pw_result["browser_goal"] = goal
+        return pw_result
+
+    http_result = _fetch_url_httpx(primary)
+    if robots_ex:
+        http_result["robots_txt_excerpt"] = robots_ex
+    if goal:
+        http_result["browser_goal"] = goal
+    if pw_result and pw_result.get("fetch_error"):
+        http_result["playwright_attempt_error"] = pw_result["fetch_error"]
+    return http_result
+
+
+def _code_interpreter_tool(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Mock AgentCore Code Interpreter (POC: no real sandbox)."""
+    task = ""
+    if isinstance(state, dict):
+        task = str(state.get("code_or_task") or state.get("code") or "")
+    return {
+        "stdout": (
+            "Mock Code Interpreter (POC): enable AgentCore managed Code Interpreter on the runtime. "
+            + (f"Task hint: {task[:200]}" if task else "")
+        ).strip(),
+        "artifacts": [],
+        "source": "Mock AgentCore Code Interpreter",
+    }
+
+
 def _aws_compliance_checker(state: Dict[str, Any]) -> Dict[str, Any]:
     """Mock AWS compliance check against KYC/AML/regulatory policies."""
     checks = {
@@ -499,6 +721,10 @@ TOOL_REGISTRY = {
     "transaction-validator": lambda state: get_fraud_score(state),
     # AWS / knowledge base
     "aws-kb-server": lambda state: _aws_kb_server(state),
+    "browser": lambda state: _browser_tool(state),
+    "web-search": lambda state: _browser_tool(state),
+    "code-interpreter": lambda state: _code_interpreter_tool(state),
+    "code_interpreter": lambda state: _code_interpreter_tool(state),
     "credit-bureau-lookup": lambda state: get_credit_bureau_data(_applicant_id(state), state),
     "income-document-retrieval": lambda state: get_income_documents(_applicant_id(state), state),
     "bank-statement-analysis": lambda state: get_bank_statements(_applicant_id(state), state),

@@ -7,7 +7,7 @@ from fastapi import FastAPI, HTTPException, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, PlainTextResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional
 import json
 import uuid
@@ -23,6 +23,7 @@ from workflow_editor import WorkflowEditor
 from deployment_manager import DeploymentManager
 from chat_manager import send_message, get_or_create_session, get_history, clear_session
 from agent_store import list_agents, get_agent, save_agent
+from sample_payload import build_sample_payload_from_workflow
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -87,6 +88,7 @@ class WorkflowGenerationResponse(BaseModel):
     schema: Dict[str, Any]
     suggested_tools: List[str]
     created_at: str
+    sample_invocation: Dict[str, Any] = Field(default_factory=dict)
 
 class AgentUpdateRequest(BaseModel):
     """Update an agent in the workflow"""
@@ -154,6 +156,9 @@ async def generate_workflow(request: WorkflowGenerationRequest):
 
         workflow["suggested_tools"] = suggested_tools_list
 
+        sample_invocation = build_sample_payload_from_workflow(workflow)
+        workflow["sample_invocation"] = sample_invocation
+
         # Save to memory (in POC, later use database)
         app.state.workflows = getattr(app.state, 'workflows', {})
         app.state.workflows[workflow_id] = workflow
@@ -164,7 +169,8 @@ async def generate_workflow(request: WorkflowGenerationRequest):
             description=workflow.get("description", ""),
             schema=workflow.get("schema", {}),
             suggested_tools=suggested_tools_list,
-            created_at=workflow["created_at"]
+            created_at=workflow["created_at"],
+            sample_invocation=sample_invocation,
         )
 
     except Exception as e:
@@ -313,6 +319,9 @@ async def deploy_workflow(workflow_id: str, request: WorkflowDeploymentRequest):
 
         # Wire save_agent() into the deploy endpoint for V3 chat UI
         agent_runtime_arn = deployment_result.get("agentRuntimeArn")
+        sample_invocation = workflow.get("sample_invocation") or build_sample_payload_from_workflow(
+            workflow
+        )
         if agent_runtime_arn:
             agent_record = save_agent(
                 name=request.deployment_name,
@@ -321,7 +330,8 @@ async def deploy_workflow(workflow_id: str, request: WorkflowDeploymentRequest):
                 agent_runtime_endpoint=deployment_result.get("agentRuntimeEndpoint", ""),
                 image_uri=deployment_result.get("imageUri", ""),
                 region=AWS_REGION,
-                tools=workflow.get("suggested_tools", [])
+                tools=workflow.get("suggested_tools", []),
+                sample_invocation=sample_invocation,
             )
             deployment_result["agent_id"] = agent_record["agent_id"]
 
@@ -330,6 +340,7 @@ async def deploy_workflow(workflow_id: str, request: WorkflowDeploymentRequest):
             "deployment_id": deployment_id,
             "agentRuntimeArn": agent_runtime_arn,
             "agent_id": deployment_result.get("agent_id"),
+            "sample_invocation": sample_invocation,
             "message": f"Workflow deployed to {request.runtime} runtime",
             "details": deployment_result
         }

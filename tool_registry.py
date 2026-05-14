@@ -109,6 +109,43 @@ class ToolRegistry:
                 },
                 tags=["search", "research"]
             ),
+            Tool(
+                name="browser",
+                source="aws-bedrock",
+                description=(
+                    "Amazon Bedrock AgentCore **Browser** built-in (managed): navigate sites, "
+                    "click, fill forms, extract DOM, screenshots. Enable on the AgentCore runtime / "
+                    "agent configuration in AWS; use when the task needs live web or authenticated "
+                    "portals (see AgentCore Browser tool docs)."
+                ),
+                input_schema={
+                    "url": "string",
+                    "goal": "string (what to extract or verify)"
+                },
+                output_schema={
+                    "summary": "string",
+                    "sources": "array"
+                },
+                tags=["browser", "web", "agentcore", "research", "builtin"]
+            ),
+            Tool(
+                name="code-interpreter",
+                source="aws-bedrock",
+                description=(
+                    "Amazon Bedrock AgentCore **Code Interpreter** built-in (managed sandbox): "
+                    "run Python, install packages, plot, process uploads. Enable on the AgentCore "
+                    "runtime / agent configuration in AWS (see bedrock_agentcore.tools.code_interpreter_client)."
+                ),
+                input_schema={
+                    "code_or_task": "string",
+                    "files": "array (optional)"
+                },
+                output_schema={
+                    "stdout": "string",
+                    "artifacts": "array"
+                },
+                tags=["code", "python", "sandbox", "agentcore", "builtin"]
+            ),
             # Loan Underwriting Tools
             Tool(
                 name="credit-bureau-lookup",
@@ -336,6 +373,38 @@ class ToolRegistry:
         if any(kw in text for kw in ["policy", "regulation", "audit", "kyc", "aml", "ofac"]):
             suggested_tools.append(self.aws_bedrock_tools.get("aws-kb-server"))
             suggested_tools.append(self.aws_bedrock_tools.get("aws-compliance-checker"))
+
+        if any(
+            kw in text
+            for kw in [
+                "browser",
+                "browse the",
+                "web page",
+                "website",
+                "open url",
+                "fetch page",
+                "live web",
+                "agentcore browser",
+            ]
+        ):
+            suggested_tools.append(self.aws_bedrock_tools.get("browser"))
+
+        if any(
+            kw in text
+            for kw in [
+                "code interpreter",
+                "code-interpreter",
+                "execute python",
+                "run python",
+                "pandas",
+                "numpy",
+                "matplotlib",
+                "plot ",
+                "sandbox",
+                "compute in code",
+            ]
+        ):
+            suggested_tools.append(self.aws_bedrock_tools.get("code-interpreter"))
 
         # Filter out None values and deduplicate while preserving order
         seen = set()
